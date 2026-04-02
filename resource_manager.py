@@ -12,7 +12,7 @@ from treelib import Tree
 from treelib.exceptions import NodeIDAbsentError
 
 from .utils import async_to_sync, sync_to_async, is_async_func, AsyncRLock
-from .exceptions import CodeExistError, PermissionInsufficient
+from .exceptions import CodeExistError, PermissionInsufficient, ResourceManagerError
 
 
 # 资源类型
@@ -108,6 +108,141 @@ class ResourceManager:
         self._lock_async = AsyncRLock()
 
 
+    # ==== 子类可能需要重载的方法 ====
+
+
+    async def _get_control_code_async(self, code: Code) -> ControlCode:
+        """
+        返回 code 的控制码。
+
+        Args:
+            code (Code): 控制码或访问码。
+
+        Returns:
+            ControlCode: code 对应的控制码。
+
+        Raises:
+            PermissionInsufficient: 如果 code 不存在。
+        """
+        if await self.is_control_code_async(code):
+            return code
+        if await self.is_access_code_async(code):
+            return self._access_control_map[code]
+        raise PermissionInsufficient("Code not found")
+
+
+    async def _get_tree_async(self, code: Code) -> Tree[Code]:
+        """
+        返回 code 的访问控制树。
+
+        Args:
+            code (Code): 控制码或访问码。
+
+        Returns:
+            Tree[Code]: code 所在的访问控制树。
+
+        Raises:
+            PermissionInsufficient: 如果 code 不存在。
+            ResourceManagerError: 内部错误：找不到访问树。
+        """
+        control_code = await self._get_control_code_async(code)
+        code_tree = self._control_code_tree_map.get(control_code)
+        if not code_tree:
+            raise ResourceManagerError("Code tree not found")
+        return code_tree
+
+
+    async def _access_async(
+        self,
+        control_code: ControlCode,
+        parent_code: Optional[Code] = None,
+        child_code: Optional[AccessCode] = None
+    ) -> AccessCode:
+        """
+        生成一个访问码。
+
+        Args:
+            control_code (ControlCode): 控制码。
+            parent_code (Optional[Code]): 分享者。
+            child_code (Optional[AccessCode]): 自定义的访问码。若缺省，则由 access_code_gen 生成。
+
+        Raises:
+            CodeExistError: 如果提供的 child_code 已存在，或 access_code_gen 生成了重复的访问码。
+            PermissionInsufficient: 如果不存在 control_code 。
+        """
+        if not await self.is_control_code_async(control_code):
+            raise PermissionInsufficient("Control code not found")
+
+        # 生成访问码
+        access_code = child_code or await self.access_code_gen_async(
+            await self.get_async(control_code),
+            control_code,
+            parent_code
+        )
+        if await self.is_access_code_async(access_code):
+            raise CodeExistError("Access code already exists")
+
+        self._access_control_map[access_code] = control_code
+
+        if not parent_code:
+            parent_code = control_code
+
+        # 将访问码添加到访问码树中
+        code_tree = self._control_code_tree_map[control_code]
+        code_tree.create_node(identifier=access_code, parent=parent_code)
+
+        return access_code
+
+
+    async def _create_tree_async(self, control_code: ControlCode) -> Tree[Code]:
+        """
+        创建一棵访问树。
+        """
+        code_tree = Tree()
+        code_tree.create_node(identifier=control_code)
+        self._control_code_tree_map[control_code] = code_tree
+        return code_tree
+
+
+    async def _get_resource_async(self, control_code: ControlCode) -> Resource:
+        """
+        返回资源。
+
+        Args:
+            code (Code): 控制码或访问码。
+
+        Returns:
+            Resource: control_code 对应的资源。
+
+        Raises:
+            PermissionInsufficient: 如果 control_code 不是控制码。
+        """
+        return self._control_resource_map[control_code]
+
+
+    async def _set_resource_async(self, control_code: ControlCode, resource: Resource) -> None:
+        """
+        记录资源。
+
+        Args:
+            control_code (Code): 控制码。
+        """
+        self._control_resource_map[control_code] = resource
+
+
+    async def _delete_resource_async(self, control_code: ControlCode) -> None:
+        """
+        删除资源。
+
+        Args:
+            control_code (Code): 控制码。
+        """
+        self._control_resource_map.pop(control_code, None)
+        self._control_code_tree_map.pop(control_code, None)
+
+
+    # ==== 子类应该不用重载的方法 ====
+
     async def control_code_gen_async(self, resource: Optional[Resource] = None) -> ControlCode:
         """
         包装了生成控制码的函数，使其能够接受接受 resource 参数。
@@ -138,7 +273,6 @@ class ResourceManager:
                 except TypeError:
                     return await self._access_code_gen_raw_async()
 
-
     async def is_control_code_async(self, code: Code) -> bool:
         """
         判断一个 code 是否是控制码。
@@ -165,7 +299,7 @@ class ResourceManager:
             resource (Resource): 资源。
             control_code (Optional[ControlCode]): 自定义的控制码。若缺省，则由 control_code_gen 生成。
 
-        Raise:
+        Raises:
             CodeExistError: 如果提供的 control_code 已存在，或 control_code_gen 生成了重复的控制码。
         """
         # 生成控制码
@@ -174,12 +308,10 @@ class ResourceManager:
             raise CodeExistError("Control code already exists")
 
         # 记录资源
-        self._control_resource_map[control_code] = resource
+        await self._set_resource_async(control_code, resource)
 
         # 初始化 code_tree
-        code_tree = Tree()
-        code_tree.create_node(identifier=control_code)
-        self._control_code_tree_map[control_code] = code_tree
+        await self._create_tree_async(control_code)
 
         return control_code
 
@@ -190,7 +322,7 @@ class ResourceManager:
         """
         if not await self.is_control_code_async(control_code):
             raise PermissionInsufficient("Control code not found")
-        self._control_resource_map[control_code] = new_resource
+        await self._set_resource_async(control_code, new_resource)
 
 
     async def delete_async(self, control_code: ControlCode) -> None:
@@ -209,63 +341,21 @@ class ResourceManager:
                     self._access_control_map.pop(node.identifier, None)
 
         # 删除资源映射
-        self._control_resource_map.pop(control_code, None)
-        # 删除访问码树
-        self._control_code_tree_map.pop(control_code, None)
+        self._delete_resource_async(control_code)
 
 
     async def get_async(self, code: Code) -> Resource:
         """
         获取一项资源。
-        """
-        if await self.is_control_code_async(code):
-            return self._control_resource_map[code]
-        if await self.is_access_code_async(code):
-            control_code = self._access_control_map[code]
-            return await self.get_async(control_code)
-        raise PermissionInsufficient("Code not found")
-
-
-    async def _access_async(
-        self,
-        control_code: ControlCode,
-        parent_code: Optional[Code] = None,
-        child_code: Optional[AccessCode] = None
-    ) -> AccessCode:
-        """
-        生成一个访问码。
 
         Args:
-            control_code (ControlCode): 控制码。
-            parent_code (Optional[Code]): 分享者。
-            child_code (Optional[AccessCode]): 自定义的访问码。若缺省，则由 access_code_gen 生成。
+            code (Code): 控制码或访问码。
 
-        Raise:
-            CodeExistError: 如果提供的 child_code 已存在，或 access_code_gen 生成了重复的访问码。
-            PermissionInsufficient: 如果不存在 control_code 。
+        Raises:
+            PermissionInsufficient: 如果 code 不存在。
         """
-        if not await self.is_control_code_async(control_code):
-            raise PermissionInsufficient("Control code not found")
-
-        # 生成访问码
-        access_code = child_code or await self.access_code_gen_async(
-            await self.get_async(control_code),
-            control_code,
-            parent_code
-        )
-        if await self.is_access_code_async(access_code):
-            raise CodeExistError("Access code already exists")
-
-        self._access_control_map[access_code] = control_code
-
-        if not parent_code:
-            parent_code = control_code
-
-        # 将访问码添加到访问码树中
-        code_tree = self._control_code_tree_map[control_code]
-        code_tree.create_node(identifier=access_code, parent=parent_code)
-
-        return access_code
+        control_code = await self._get_control_code_async(code)
+        return await self._get_resource_async(control_code)
 
 
     async def share_async(self, parent_code: Code, child_code: Optional[AccessCode] = None) -> AccessCode:
@@ -276,22 +366,16 @@ class ResourceManager:
             parent_code (Optional[Code]): 分享者。
             child_code (Optional[AccessCode]): 自定义的访问码。若缺省，则由 access_code_gen 生成。
 
-        Raise:
+        Raises:
             CodeExistError: 如果提供的 child_code 已存在，或 access_code_gen 生成了重复的访问码 。
             PermissionInsufficient: 如果不存在 parent_code 。
         """
-        if await self.is_control_code_async(parent_code):
-            return await self._access_async(control_code=parent_code, child_code=child_code)
-
-        if await self.is_access_code_async(parent_code):
-            control_code = self._access_control_map[parent_code]
-            return await self._access_async(
-                control_code=control_code,
-                parent_code=parent_code,
-                child_code=child_code
-            )
-
-        raise PermissionInsufficient("Code not found")
+        control_code = await self._get_control_code_async(parent_code)
+        return await self._access_async(
+            control_code=control_code,
+            parent_code=parent_code,
+            child_code=child_code
+        )
 
 
     async def revoke_async(self, ancestor_code: Code, descendant_code: AccessCode) -> None:
@@ -302,23 +386,15 @@ class ResourceManager:
             ancestor_code (Code): 撤销发起者。
             descendant_code (Code): 被撤销者。
 
-        Raise:
+        Raises:
             PermissionInsufficient: 
             - 如果不存在 ancestor_code 或 descendant_code 。
             - 如果 descendant_code 不是 ancestor_code 的后代。
-        """
-        # 查找 ancestor_code 对应的资源
-        control_code = None
-        if await self.is_control_code_async(ancestor_code):
-            control_code = ancestor_code
-        elif await self.is_access_code_async(ancestor_code):
-            control_code = self._access_control_map[ancestor_code]
-        else:
-            raise PermissionInsufficient("Ancestor code not found")
 
+            ResourceManagerError: 内部错误：找不到访问树。
+        """
         # 获取访问码树
-        code_tree = self._control_code_tree_map.get(control_code)
-        assert code_tree, "Code tree not found"
+        code_tree = await self._get_tree_async(ancestor_code)
 
         # 检查 ancestor_code 是否是 descendant_code 的祖先节点（TreeLib 的实现已保证自己不是自己的祖先）
         if (descendant_code not in code_tree) or (not code_tree.is_ancestor(ancestor_code, descendant_code)):
@@ -336,19 +412,13 @@ class ResourceManager:
     async def get_access_codes_async(self, code: Code) -> List[AccessCode]:
         """
         查看 code 的所有后代。
-        """
-        # 确定资源对应的控制码
-        control_code = None
-        if await self.is_control_code_async(code):
-            control_code = code
-        elif await self.is_access_code_async(code):
-            control_code = self._access_control_map[code]
-        else:
-            raise PermissionInsufficient("Code not found")
 
+        Raises:
+            PermissionInsufficient: 如果 code 不存在。
+            ResourceManagerError: 内部错误：找不到访问树。
+        """
         # 获取访问码树
-        code_tree = self._control_code_tree_map.get(control_code)
-        assert code_tree, "Code tree not found"
+        code_tree = await self._get_tree_async(code)
 
         # 直接获取整个子树，然后排除根节点自身
         try:

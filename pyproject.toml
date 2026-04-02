@@ -1,4 +1,4 @@
 [project]
 name = "access_control"
-version = "0.1.1"
+version = "0.1.2"
 requires-python = ">=3.10,<3.14"
