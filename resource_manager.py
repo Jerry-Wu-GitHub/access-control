@@ -4,13 +4,15 @@ class: ResourceManager
 
 import asyncio
 from collections.abc import Coroutine, Hashable, Callable
+import functools
+import threading
 from typing import Any, Dict, List, Optional, Union
 from uuid import uuid4
 
 from treelib import Tree
 from treelib.exceptions import NodeIDAbsentError
 
-from .utils import async_to_sync, sync_to_async, is_async_func
+from .utils import async_to_sync, sync_to_async, is_async_func, AsyncRLock
 
 
 # 资源类型
@@ -51,7 +53,24 @@ class PermissionInsufficient(Exception):
     """
 
 
+def async_locked(method: Callable) -> Callable:
+    """装饰器：为异步方法自动加上 RLock"""
+    @functools.wraps(method)
+    async def wrapper(self, *args, **kwargs):
+        async with self._lock_async:
+            return await method(self, *args, **kwargs)
+    return wrapper
 
+
+def lock_all_async_methods(cls):
+    """类装饰器：为类中所有异步方法应用 @async_locked"""
+    for attr_name, attr_value in cls.__dict__.items():
+        if is_async_func(attr_value):
+            setattr(cls, attr_name, async_locked(attr_value))
+    return cls
+
+
+@lock_all_async_methods
 class ResourceManager:
     """
     Implementing access control for resources.
@@ -62,8 +81,6 @@ class ResourceManager:
 
     If control/access codes, codes generators, and resources are pickle serializable,
     then the ResourceManager object can also be.
-
-    Provide asynchronous version interfaces for operations on resources.
     """
     def __init__(
         self,
@@ -92,6 +109,9 @@ class ResourceManager:
 
         # 存储资源的访问码树：control_code -> code_tree
         self._control_code_tree_map: Dict[ControlCode, Tree[Code]] = {}
+
+        # 异步锁，用于线程安全
+        self._lock_async = AsyncRLock()
 
 
     async def control_code_gen_async(self, resource: Optional[Resource] = None) -> ControlCode:
