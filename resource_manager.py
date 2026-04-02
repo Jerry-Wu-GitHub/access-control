@@ -2,11 +2,15 @@
 class: ResourceManager
 """
 
-from collections.abc import Hashable, Callable
+import asyncio
+from collections.abc import Coroutine, Hashable, Callable
 from typing import Any, Dict, List, Optional, Union
 from uuid import uuid4
 
 from treelib import Tree
+from treelib.exceptions import NodeIDAbsentError
+
+from .utils import async_to_sync, sync_to_async, is_async_func
 
 
 # 资源类型
@@ -25,7 +29,19 @@ Code = Union[ControlCode, AccessCode]
 ControlCodeGen = Callable[[Optional[Resource]], ControlCode]
 
 # 生成访问码的函数类型
-AccessCodeGen = Callable[[Optional[Resource], Optional[ControlCode], Optional[AccessCode]], ControlCode]
+AccessCodeGen = Callable[
+    [Optional[Resource], Optional[ControlCode], Optional[AccessCode]],
+    AccessCode
+]
+
+# 生成控制码的异步函数类型
+ControlCodeGenAsync = Callable[[Optional[Resource]], Coroutine[None, None, ControlCode]]
+
+# 生成访问码的异步函数类型
+AccessCodeGenAsync = Callable[
+    [Optional[Resource], Optional[ControlCode], Optional[AccessCode]],
+    Coroutine[None, None, AccessCode]
+]
 
 
 
@@ -44,23 +60,29 @@ class ResourceManager:
 
     A single resource can have multiple access codes, but only one control code.
 
-    If control codes, access codes, and resources are pickle serializable,
+    If control/access codes, codes generators, and resources are pickle serializable,
     then the ResourceManager object can also be.
 
     Provide asynchronous version interfaces for operations on resources.
     """
     def __init__(
         self,
-        control_code_gen: Optional[ControlCodeGen] = None,
-        access_code_gen: Optional[AccessCodeGen] = None,
+        control_code_gen: Optional[ControlCodeGen | ControlCodeGenAsync] = None,
+        access_code_gen: Optional[AccessCodeGen | AccessCodeGenAsync] = None,
     ):
         # 控制码、访问码生成函数
         if not control_code_gen:
             control_code_gen = uuid4
+        if not is_async_func(control_code_gen):
+            control_code_gen = sync_to_async(control_code_gen)
+
         if not access_code_gen:
             access_code_gen = control_code_gen
-        self._control_code_gen_raw: ControlCodeGen = control_code_gen
-        self._access_code_gen_raw: AccessCodeGen = access_code_gen
+        if not is_async_func(access_code_gen):
+            access_code_gen = sync_to_async(access_code_gen)
+
+        self._control_code_gen_raw_async: ControlCodeGen = control_code_gen
+        self._access_code_gen_raw_async: AccessCodeGen = access_code_gen
 
         # 存储控制码和资源的关系：control_code -> resource
         self._control_resource_map: Dict[ControlCode, Resource] = {}
@@ -69,46 +91,60 @@ class ResourceManager:
         self._access_control_map: Dict[AccessCode, ControlCode] = {}
 
         # 存储资源的访问码树：control_code -> code_tree
-        self._control_code_tree_map: Dict[Resource, Tree[Code]] = {}
+        self._control_code_tree_map: Dict[ControlCode, Tree[Code]] = {}
 
 
-    def control_code_gen(self, resource: Optional[Resource] = None) -> ControlCode:
+    async def control_code_gen_async(self, resource: Optional[Resource] = None) -> ControlCode:
         """
         包装了生成控制码的函数，使其能够接受接受 resource 参数。
         """
         try:
-            return self._control_code_gen_raw(resource)
+            return await self._control_code_gen_raw_async(resource)
         except TypeError:
-            return self._control_code_gen_raw()
+            return await self._control_code_gen_raw_async()
 
 
-    def access_code_gen(
+    async def access_code_gen_async(
         self,
         resource: Optional[Resource] = None,
         control_code: Optional[ControlCode] = None,
         parent_access_code: Optional[AccessCode] = None
     ) -> AccessCode:
         """
-        包装生成访问码的函数，使其能够接受 resource、control_code、parent_access_code 参数。
+        包装生成访问码的异步函数，使其能够接受 resource、control_code、parent_access_code 参数。
         """
         try:
-            return self._access_code_gen_raw(resource, control_code, parent_access_code)
+            return await self._access_code_gen_raw_async(resource, control_code, parent_access_code)
         except TypeError:
             try:
-                return self._access_code_gen_raw(resource, control_code)
+                return await self._access_code_gen_raw_async(resource, control_code)
             except TypeError:
                 try:
-                    return self._access_code_gen_raw(resource)
+                    return await self._access_code_gen_raw_async(resource)
                 except TypeError:
-                    return self._access_code_gen_raw()
+                    return await self._access_code_gen_raw_async()
 
 
-    def create(self, resource: Resource) -> ControlCode:
+    async def is_control_code_async(self, code: Code) -> bool:
+        """
+        判断一个 code 是否是控制码。
+        """
+        return code in self._control_resource_map
+
+
+    async def is_access_code_async(self, code: Code) -> bool:
+        """
+        判断一个 code 是否是访问码。
+        """
+        return code in self._access_control_map
+
+
+    async def create_async(self, resource: Resource) -> ControlCode:
         """
         创建一个资源。
         """
         # 记录资源
-        control_code = self.control_code_gen(resource)
+        control_code = await self.control_code_gen_async(resource)
         self._control_resource_map[control_code] = resource
 
         # 初始化 code_tree
@@ -118,33 +154,21 @@ class ResourceManager:
 
         return control_code
 
-    async def create_async(self, resource: Resource) -> ControlCode:
-        """
-        Asynchronous version of `.create`.
-        """
-        return self.create(resource)
-
-
-    def replace(self, control_code: ControlCode, new_resource: Resource) -> None:
-        """
-        替换一项资源。
-        """
-        if control_code not in self._control_resource_map:
-            raise PermissionInsufficient("Control code not found")
-        self._control_resource_map[control_code] = new_resource
 
     async def replace_async(self, control_code: ControlCode, new_resource: Resource) -> None:
         """
-        Asynchronous version of `.replace`.
+        替换一项资源。
         """
-        return self.replace(control_code=control_code, new_resource=new_resource)
+        if not await self.is_control_code_async(control_code):
+            raise PermissionInsufficient("Control code not found")
+        self._control_resource_map[control_code] = new_resource
 
 
-    def delete(self, control_code: ControlCode) -> None:
+    async def delete_async(self, control_code: ControlCode) -> None:
         """
         删除一项资源及其所有访问码。
         """
-        if control_code not in self._control_resource_map:
+        if not await self.is_control_code_async(control_code):
             raise PermissionInsufficient("Control code not found")
 
         # 获取该资源对应的访问码树
@@ -160,32 +184,20 @@ class ResourceManager:
         # 删除访问码树
         self._control_code_tree_map.pop(control_code, None)
 
-    async def delete_async(self, control_code: ControlCode) -> None:
-        """
-        Asynchronous version of `.delete`.
-        """
-        return self.delete(control_code)
-
-
-    def get(self, code: Code) -> Resource:
-        """
-        获取一项资源。
-        """
-        if code in self._control_resource_map:
-            return self._control_resource_map[code]
-        if code in self._access_control_map:
-            control_code = self._access_control_map[code]
-            return self._control_resource_map[control_code]
-        raise PermissionInsufficient("Code not found")
 
     async def get_async(self, code: Code) -> Resource:
         """
-        Asynchronous version of `.get`.
+        获取一项资源。
         """
-        return self.get(code)
+        if await self.is_control_code_async(code):
+            return self._control_resource_map[code]
+        if await self.is_access_code_async(code):
+            control_code = self._access_control_map[code]
+            return await self.get_async(control_code)
+        raise PermissionInsufficient("Code not found")
 
 
-    def access(
+    async def _access_async(
         self,
         control_code: ControlCode,
         parent_code: Optional[Code] = None
@@ -193,11 +205,11 @@ class ResourceManager:
         """
         生成一个访问码。
         """
-        if control_code not in self._control_resource_map:
+        if not await self.is_control_code_async(control_code):
             raise PermissionInsufficient("Control code not found")
 
-        access_code = self.access_code_gen(
-            self._control_resource_map[control_code],
+        access_code = await self.access_code_gen_async(
+            await self.get_async(control_code),
             control_code,
             parent_code
         )
@@ -213,29 +225,29 @@ class ResourceManager:
         return access_code
 
 
-    def share(self, code: Code) -> AccessCode:
+    async def share_async(self, code: Code) -> AccessCode:
         """
         生成一个新的访问码。
         """
-        if code in self._control_resource_map:
-            return self.access(control_code=code)
+        if await self.is_control_code_async(code):
+            return await self._access_async(control_code=code)
 
-        if code in self._access_control_map:
+        if await self.is_access_code_async(code):
             control_code = self._access_control_map[code]
-            return self.access(control_code=control_code, parent_code=code)
+            return await self._access_async(control_code=control_code, parent_code=code)
 
         raise PermissionInsufficient("Code not found")
 
 
-    def revoke(self, ancestor_code: Code, descendant_code: AccessCode) -> None:
+    async def revoke_async(self, ancestor_code: Code, descendant_code: AccessCode) -> None:
         """
         撤销一个访问码及其所有子访问码，不能撤销自己。
         """
         # 查找 ancestor_code 对应的资源
         control_code = None
-        if ancestor_code in self._control_resource_map:
+        if await self.is_control_code_async(ancestor_code):
             control_code = ancestor_code
-        elif ancestor_code in self._access_control_map:
+        elif await self.is_access_code_async(ancestor_code):
             control_code = self._access_control_map[ancestor_code]
         else:
             raise PermissionInsufficient("Ancestor code not found")
@@ -249,22 +261,23 @@ class ResourceManager:
             raise PermissionInsufficient("Cannot revoke: not ancestor of the descendant code")
 
         # 获取删除的树节点（descendant_code 及其子树）
-        subtree_nodes = code_tree.remove_subtree(descendant_code).all_nodes()
+        subtree = code_tree.remove_subtree(descendant_code)
+        subtree_nodes = subtree.all_nodes()
 
         # 删除访问码映射
-        for node_id in subtree_nodes:
-            self._access_control_map.pop(node_id, None)
+        for node in subtree_nodes:
+            self._access_control_map.pop(node.identifier, None)
 
 
-    def get_access_codes(self, code: Code) -> List[AccessCode]:
+    async def get_access_codes_async(self, code: Code) -> List[AccessCode]:
         """
         查看 code 的所有后代。
         """
         # 确定资源对应的控制码
         control_code = None
-        if code in self._control_resource_map:
+        if await self.is_control_code_async(code):
             control_code = code
-        elif code in self._access_control_map:
+        elif await self.is_access_code_async(code):
             control_code = self._access_control_map[code]
         else:
             raise PermissionInsufficient("Code not found")
@@ -273,18 +286,21 @@ class ResourceManager:
         code_tree = self._control_code_tree_map.get(control_code)
         assert code_tree, "Code tree not found"
 
-        # 获取指定节点的所有后代节点
-        descendants = code_tree.children(code)
-        result = []
-        for node in descendants:
-            result.append(node.identifier)
-            # 递归获取所有后代
-            result.extend(self.get_access_codes(node.identifier))
+        # 直接获取整个子树，然后排除根节点自身
+        try:
+            subtree = code_tree.subtree(code)
+        except NodeIDAbsentError:
+            # 如果 code 不在树中（可能已被删除），返回空列表
+            return []
 
-        return result
+        return [
+            node.identifier
+            for node in subtree.all_nodes()
+            if node.identifier != code
+        ]
 
 
-    def transfer(
+    async def transfer_async(
         self,
         old_control_code: ControlCode,
         new_control_code: ControlCode
@@ -294,29 +310,35 @@ class ResourceManager:
 
         原控制码及其树被删除，新控制码的资源被修改为原控制码的资源。
         """
-        if old_control_code not in self._control_resource_map:
+        if not await self.is_control_code_async(old_control_code):
             raise PermissionInsufficient("Old control code not found")
-        if new_control_code not in self._control_resource_map:
+        if not await self.is_control_code_async(new_control_code):
             raise PermissionInsufficient("New control code not found")
 
         # 获取原资源
-        resource = self._control_resource_map[old_control_code]
+        resource = await self.get_async(old_control_code)
 
         # 将资源转移到新控制码
-        self.replace(new_control_code, resource)
+        await self.replace_async(new_control_code, resource)
 
         # 移除原访问码树
-        self.delete(old_control_code)
+        await self.delete_async(old_control_code)
 
-    async def transfer_async(
-        self,
-        old_control_code: ControlCode,
-        new_control_code: ControlCode
-    ) -> None:
-        """
-        Asynchronous version of `.transfer`.
-        """
-        return self.transfer(old_control_code=old_control_code, new_control_code=new_control_code)
+
+    # 异步方法转同步
+    control_code_gen    = async_to_sync(control_code_gen_async)
+    access_code_gen     = async_to_sync(access_code_gen_async)
+    is_control_code     = async_to_sync(is_control_code_async)
+    is_access_code      = async_to_sync(is_access_code_async)
+    create              = async_to_sync(create_async)
+    replace             = async_to_sync(replace_async)
+    delete              = async_to_sync(delete_async)
+    get                 = async_to_sync(get_async)
+    share               = async_to_sync(share_async)
+    revoke              = async_to_sync(revoke_async)
+    get_access_codes    = async_to_sync(get_access_codes_async)
+    transfer            = async_to_sync(transfer_async)
+
 
 
 def _test():
@@ -338,5 +360,25 @@ def _test():
     print(pickle.dumps(manager))
 
 
+async def _test_async():
+    """
+    异步测试。
+    """
+    resource = 1
+    manager = ResourceManager()
+    control_code = await manager.create_async(resource)
+    print(f"{control_code=}")
+    access_code1 = await manager.share_async(control_code)
+    access_code2 = await manager.share_async(control_code)
+    access_code3 = await manager.share_async(access_code1)
+    print(await manager.get_access_codes_async(control_code)) # access_code1, access_code2, access_code3
+    await manager.revoke_async(control_code, access_code1)
+    print(await manager.get_access_codes_async(control_code)) # access_code2
+
+    import pickle
+    print(pickle.dumps(manager))
+
+
 if __name__ == '__main__':
     _test()
+    asyncio.run(_test_async())
