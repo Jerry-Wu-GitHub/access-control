@@ -92,8 +92,8 @@ class ResourceManager:
         if not is_async_func(access_code_gen):
             access_code_gen = sync_to_async(access_code_gen)
 
-        self._control_code_gen_raw_async: ControlCodeGen = control_code_gen
-        self._access_code_gen_raw_async: AccessCodeGen = access_code_gen
+        self._control_code_gen_raw_async: ControlCodeGenAsync = control_code_gen
+        self._access_code_gen_raw_async: AccessCodeGenAsync = access_code_gen
 
         # 存储控制码和资源的关系：control_code -> resource
         self._control_resource_map: Dict[ControlCode, Resource] = {}
@@ -481,12 +481,15 @@ def _test():
     """
     resource = 1
     manager = ResourceManager()
+
     control_code = manager.create(resource)
     print(f"{control_code=}")
+
     access_code1 = manager.share(control_code)
     access_code2 = manager.share(control_code)
     access_code3 = manager.share(access_code1)
     print(manager.get_access_codes(control_code)) # access_code1, access_code2, access_code3
+
     manager.revoke(control_code, access_code1)
     print(manager.get_access_codes(control_code)) # access_code2
 
@@ -500,12 +503,15 @@ async def _test_async():
     """
     resource = 1
     manager = ResourceManager()
+
     control_code = await manager.create_async(resource)
     print(f"{control_code=}")
+
     access_code1 = await manager.share_async(control_code)
     access_code2 = await manager.share_async(control_code)
     access_code3 = await manager.share_async(access_code1)
     print(await manager.get_access_codes_async(control_code)) # access_code1, access_code2, access_code3
+
     await manager.revoke_async(control_code, access_code1)
     print(await manager.get_access_codes_async(control_code)) # access_code2
 
