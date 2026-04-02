@@ -5,7 +5,6 @@ class: ResourceManager
 import asyncio
 from collections.abc import Coroutine, Hashable, Callable
 import functools
-import threading
 from typing import Any, Dict, List, Optional, Union
 from uuid import uuid4
 
@@ -13,6 +12,7 @@ from treelib import Tree
 from treelib.exceptions import NodeIDAbsentError
 
 from .utils import async_to_sync, sync_to_async, is_async_func, AsyncRLock
+from .exceptions import CodeExistError, PermissionInsufficient
 
 
 # 资源类型
@@ -45,12 +45,6 @@ AccessCodeGenAsync = Callable[
     Coroutine[None, None, AccessCode]
 ]
 
-
-
-class PermissionInsufficient(Exception):
-    """
-    所使用的控制/访问码的权限不足（控制/访问码不存在）
-    """
 
 
 def async_locked(method: Callable) -> Callable:
@@ -159,12 +153,27 @@ class ResourceManager:
         return code in self._access_control_map
 
 
-    async def create_async(self, resource: Resource) -> ControlCode:
+    async def create_async(
+        self,
+        resource: Resource,
+        control_code: Optional[ControlCode] = None
+    ) -> ControlCode:
         """
         创建一个资源。
+
+        Args:
+            resource (Resource): 资源。
+            control_code (Optional[ControlCode]): 自定义的控制码。若缺省，则由 control_code_gen 生成。
+
+        Raise:
+            CodeExistError: 如果提供的 control_code 已存在，或 control_code_gen 生成了重复的控制码。
         """
+        # 生成控制码
+        control_code = control_code or await self.control_code_gen_async(resource)
+        if await self.is_control_code_async(control_code):
+            raise CodeExistError("Control code already exists")
+
         # 记录资源
-        control_code = await self.control_code_gen_async(resource)
         self._control_resource_map[control_code] = resource
 
         # 初始化 code_tree
@@ -186,7 +195,7 @@ class ResourceManager:
 
     async def delete_async(self, control_code: ControlCode) -> None:
         """
-        删除一项资源及其所有访问码。
+        删除一项资源及其控制码、所有访问码。
         """
         if not await self.is_control_code_async(control_code):
             raise PermissionInsufficient("Control code not found")
@@ -220,19 +229,33 @@ class ResourceManager:
     async def _access_async(
         self,
         control_code: ControlCode,
-        parent_code: Optional[Code] = None
+        parent_code: Optional[Code] = None,
+        child_code: Optional[AccessCode] = None
     ) -> AccessCode:
         """
         生成一个访问码。
+
+        Args:
+            control_code (ControlCode): 控制码。
+            parent_code (Optional[Code]): 分享者。
+            child_code (Optional[AccessCode]): 自定义的访问码。若缺省，则由 access_code_gen 生成。
+
+        Raise:
+            CodeExistError: 如果提供的 child_code 已存在，或 access_code_gen 生成了重复的访问码。
+            PermissionInsufficient: 如果不存在 control_code 。
         """
         if not await self.is_control_code_async(control_code):
             raise PermissionInsufficient("Control code not found")
 
-        access_code = await self.access_code_gen_async(
+        # 生成访问码
+        access_code = child_code or await self.access_code_gen_async(
             await self.get_async(control_code),
             control_code,
             parent_code
         )
+        if await self.is_access_code_async(access_code):
+            raise CodeExistError("Access code already exists")
+
         self._access_control_map[access_code] = control_code
 
         if not parent_code:
@@ -245,16 +268,28 @@ class ResourceManager:
         return access_code
 
 
-    async def share_async(self, code: Code) -> AccessCode:
+    async def share_async(self, parent_code: Code, child_code: Optional[AccessCode] = None) -> AccessCode:
         """
         生成一个新的访问码。
-        """
-        if await self.is_control_code_async(code):
-            return await self._access_async(control_code=code)
 
-        if await self.is_access_code_async(code):
-            control_code = self._access_control_map[code]
-            return await self._access_async(control_code=control_code, parent_code=code)
+        Args:
+            parent_code (Optional[Code]): 分享者。
+            child_code (Optional[AccessCode]): 自定义的访问码。若缺省，则由 access_code_gen 生成。
+
+        Raise:
+            CodeExistError: 如果提供的 child_code 已存在，或 access_code_gen 生成了重复的访问码 。
+            PermissionInsufficient: 如果不存在 parent_code 。
+        """
+        if await self.is_control_code_async(parent_code):
+            return await self._access_async(control_code=parent_code, child_code=child_code)
+
+        if await self.is_access_code_async(parent_code):
+            control_code = self._access_control_map[parent_code]
+            return await self._access_async(
+                control_code=control_code,
+                parent_code=parent_code,
+                child_code=child_code
+            )
 
         raise PermissionInsufficient("Code not found")
 
@@ -262,6 +297,15 @@ class ResourceManager:
     async def revoke_async(self, ancestor_code: Code, descendant_code: AccessCode) -> None:
         """
         撤销一个访问码及其所有子访问码，不能撤销自己。
+
+        Args:
+            ancestor_code (Code): 撤销发起者。
+            descendant_code (Code): 被撤销者。
+
+        Raise:
+            PermissionInsufficient: 
+            - 如果不存在 ancestor_code 或 descendant_code 。
+            - 如果 descendant_code 不是 ancestor_code 的后代。
         """
         # 查找 ancestor_code 对应的资源
         control_code = None
