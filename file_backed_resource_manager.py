@@ -9,6 +9,9 @@ import pickle
 from typing import Optional, override
 from uuid import uuid4
 
+import aiofiles
+import aiofiles.os
+
 from .utils import sync_to_async, is_async_func
 from .resource_manager import (
     ResourceManager,
@@ -35,9 +38,13 @@ FileNameGenAsync = Callable[[Optional[Resource], Optional[ControlCode]], Corouti
 
 class FileBackedResourceManager(ResourceManager):
     """
-    将数据存储到磁盘上。
-    """
+    Subclass of ResourceManager.
+    
+    Store resources in disk files.
 
+    If control/access codes, codes generators and filename generator are all pickle serializable,
+    then the FileBackedResourceManager object can also be.
+    """
     def __init__(
         self,
         data_dir_path: str,
@@ -50,6 +57,17 @@ class FileBackedResourceManager(ResourceManager):
     ):
         """
         初始化一个 FileBackedResourceManager 对象。
+
+        Args:
+            data_dir_path (str): 存储资源文件的目录。
+            dumps_function (Optional[DumpsFunction | DumpsFunctionAsync]): 将资源转换为字节串的函数，
+                默认为 pickle.dumps 。
+            loads_function (Optional[LoadsFunction | LoadsFunctionAsync]): 将字节串解码为资源的函数，
+                默认为 pickle.loads 。
+            file_name_gen (Optional[FileNameGen | FileNameGenAsync]): 根据资源内容（可选）和控制码（可选）生成文件名的函数。
+            control_code_gen (Optional[ControlCodeGen | ControlCodeGenAsync]): 根据资源内容（可选）生成控制码的函数。
+            access_code_gen (Optional[AccessCodeGen | AccessCodeGenAsync]): 根据资源内容（可选）、控制码（可选）、
+                父级访问码（可选）生成访问码的函数。
         """
         super().__init__(control_code_gen, access_code_gen)
 
@@ -79,6 +97,9 @@ class FileBackedResourceManager(ResourceManager):
 
 
     def _get_path(self, file_name: str) -> str:
+        """
+        获取文件存储的路径。
+        """
         return os.path.join(self.data_dir_path, file_name)
 
 
@@ -121,8 +142,8 @@ class FileBackedResourceManager(ResourceManager):
         file_path = self._get_path(file_name)
 
         # 读取文件
-        with open(file_path, mode="rb") as file:
-            content = file.read()
+        async with aiofiles.open(file_path, mode="rb") as file:
+            content = await file.read()
         return await self.loads_async(content)
 
 
@@ -136,14 +157,16 @@ class FileBackedResourceManager(ResourceManager):
         """
         # 生成文件名
         file_name = await self.file_name_gen_async(resource=resource, control_code=control_code)
-        await super()._set_resource_async(control_code, file_name)
 
         # 写入文件
-        os.makedirs(self.data_dir_path, exist_ok=True)
+        await aiofiles.os.makedirs(self.data_dir_path, exist_ok=True)
         file_path = self._get_path(file_name)
         content = await self.dumps_async(resource)
-        with open(file_path, mode="wb") as file:
-            file.write(content)
+        async with aiofiles.open(file_path, mode="wb") as file:
+            await file.write(content)
+
+        # 记录
+        await super()._set_resource_async(control_code, file_name)
 
 
     @override
@@ -154,13 +177,15 @@ class FileBackedResourceManager(ResourceManager):
         Args:
             control_code (Code): 控制码。
         """
-        # 删除文件
-        file_name = await super().get_async(control_code)
-        file_path = self._get_path(file_name)
-        os.remove(file_path)
+        file_name = await super()._get_resource_async(control_code)
 
         # 删除记录
         await super()._delete_resource_async(control_code)
+
+        # 删除文件
+        file_path = self._get_path(file_name)
+        if await aiofiles.os.path.isfile(file_path):
+            await aiofiles.os.remove(file_path)
 
 
 def _test():
@@ -183,8 +208,9 @@ def _test():
 
     print(manager.get(access_code2))
 
-    import pickle
     print(pickle.dumps(manager))
+
+    manager.delete(control_code)
 
 
 async def _test_async():
@@ -207,8 +233,9 @@ async def _test_async():
 
     print(await manager.get_async(access_code2))
 
-    import pickle
     print(pickle.dumps(manager))
+
+    await manager.delete_async(control_code)
 
 
 if __name__ == '__main__':

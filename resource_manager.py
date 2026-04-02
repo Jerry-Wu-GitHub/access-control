@@ -73,7 +73,7 @@ class ResourceManager:
 
     A single resource can have multiple access codes, but only one control code.
 
-    If control/access codes, codes generators, and resources are pickle serializable,
+    If control/access codes, codes generators, and resources are all pickle serializable,
     then the ResourceManager object can also be.
     """
     def __init__(
@@ -81,6 +81,14 @@ class ResourceManager:
         control_code_gen: Optional[ControlCodeGen | ControlCodeGenAsync] = None,
         access_code_gen: Optional[AccessCodeGen | AccessCodeGenAsync] = None,
     ):
+        """
+        初始化一个 ResourceManager 对象。
+
+        Args:
+            control_code_gen (Optional[ControlCodeGen | ControlCodeGenAsync]): 根据资源内容（可选）生成控制码的函数。
+            access_code_gen (Optional[AccessCodeGen | AccessCodeGenAsync]): 根据资源内容（可选）、控制码（可选）、
+                父级访问码（可选）生成访问码的函数。
+        """
         # 控制码、访问码生成函数
         if not control_code_gen:
             control_code_gen = uuid4
@@ -319,6 +327,10 @@ class ResourceManager:
     async def replace_async(self, control_code: ControlCode, new_resource: Resource) -> None:
         """
         替换一项资源。
+
+        Args:
+            control_code (ControlCode): 被操作的控制码。
+            new_resource (Resource): 新的资源。
         """
         if not await self.is_control_code_async(control_code):
             raise PermissionInsufficient("Control code not found")
@@ -341,7 +353,7 @@ class ResourceManager:
                     self._access_control_map.pop(node.identifier, None)
 
         # 删除资源映射
-        self._delete_resource_async(control_code)
+        await self._delete_resource_async(control_code)
 
 
     async def get_async(self, code: Code) -> Resource:
@@ -442,12 +454,18 @@ class ResourceManager:
         """
         转让资源所有者。
 
-        原控制码及其树被删除，新控制码的资源被修改为原控制码的资源。
+        原控制码及其访问树被删除，新控制码的资源被修改为原控制码的资源。
+
+        Args:
+            old_control_code (ControlCode): 原控制码。
+            new_control_code (ControlCode): 新控制码。
         """
         if not await self.is_control_code_async(old_control_code):
             raise PermissionInsufficient("Old control code not found")
         if not await self.is_control_code_async(new_control_code):
             raise PermissionInsufficient("New control code not found")
+        if old_control_code == new_control_code:
+            return
 
         # 获取原资源
         resource = await self.get_async(old_control_code)
