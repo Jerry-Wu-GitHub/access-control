@@ -6,7 +6,7 @@ import asyncio
 from collections.abc import Callable, Coroutine
 import os
 import pickle
-from typing import Optional, override
+from typing import Generic, Optional, override
 from uuid import uuid4
 
 import aiofiles
@@ -15,7 +15,7 @@ import aiofiles.os
 from .utils import sync_to_async, is_async_func
 from .resource_manager import (
     ResourceManager,
-    ControlCode, Resource,
+    ControlCode, AccessCode, Resource,
     ControlCodeGen, ControlCodeGenAsync, AccessCodeGen, AccessCodeGenAsync,
 )
 
@@ -36,7 +36,10 @@ FileNameGen = Callable[[Optional[Resource], Optional[ControlCode]], FileName]
 FileNameGenAsync = Callable[[Optional[Resource], Optional[ControlCode]], Coroutine[None, None, FileName]]
 
 
-class FileBackedResourceManager(ResourceManager):
+class FileBackedResourceManager(
+    ResourceManager[FileName, ControlCode, AccessCode],
+    Generic[Resource, ControlCode, AccessCode]
+):
     """
     Subclass of ResourceManager.
     

@@ -5,7 +5,7 @@ class: ResourceManager
 import asyncio
 from collections.abc import Coroutine, Hashable, Callable
 import functools
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, Generic, List, Optional, TypeVar, Union
 from uuid import uuid4
 
 from treelib import Tree
@@ -16,13 +16,13 @@ from .exceptions import CodeExistError, PermissionInsufficient, ResourceManagerE
 
 
 # 资源类型
-Resource = Any
+Resource = TypeVar("Resource")
 
 # 控制码类型，一般是字符串或整数
-ControlCode = Hashable
+ControlCode = TypeVar("ControlCode", bound=Hashable)
 
 # 访问码类型，一般是字符串或整数
-AccessCode = Hashable
+AccessCode = TypeVar("AccessCode", bound=Hashable)
 
 # 控制码和访问码的联合类型
 Code = Union[ControlCode, AccessCode]
@@ -65,7 +65,7 @@ def lock_all_async_methods(cls):
 
 
 @lock_all_async_methods
-class ResourceManager:
+class ResourceManager(Generic[Resource, ControlCode, AccessCode]):
     """
     Implementing access control for resources.
 
