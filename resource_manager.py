@@ -5,13 +5,14 @@ class: ResourceManager
 import asyncio
 from collections.abc import Coroutine, Hashable, Callable
 import functools
+from inspect import isawaitable
 from typing import Any, Dict, Generic, List, Optional, TypeVar, Union
 from uuid import uuid4
 
 from treelib import Tree
 from treelib.exceptions import NodeIDAbsentError
 
-from .utils import async_to_sync, sync_to_async, is_async_func, AsyncRLock
+from .utils import to_sync, to_async, AsyncRLock
 from .exceptions import CodeExistError, PermissionInsufficient, ResourceManagerError
 
 
@@ -56,15 +57,7 @@ def async_locked(method: Callable) -> Callable:
     return wrapper
 
 
-def lock_all_async_methods(cls):
-    """类装饰器：为类中所有异步方法应用 @async_locked"""
-    for attr_name, attr_value in cls.__dict__.items():
-        if is_async_func(attr_value):
-            setattr(cls, attr_name, async_locked(attr_value))
-    return cls
 
-
-@lock_all_async_methods
 class ResourceManager(Generic[Resource, ControlCode, AccessCode]):
     """
     Implementing access control for resources.
@@ -92,16 +85,12 @@ class ResourceManager(Generic[Resource, ControlCode, AccessCode]):
         # 控制码、访问码生成函数
         if not control_code_gen:
             control_code_gen = uuid4
-        if not is_async_func(control_code_gen):
-            control_code_gen = sync_to_async(control_code_gen)
 
         if not access_code_gen:
             access_code_gen = control_code_gen
-        if not is_async_func(access_code_gen):
-            access_code_gen = sync_to_async(access_code_gen)
 
-        self._control_code_gen_raw_async: ControlCodeGenAsync = control_code_gen
-        self._access_code_gen_raw_async: AccessCodeGenAsync = access_code_gen
+        self._control_code_gen_raw_async: ControlCodeGenAsync = to_async(control_code_gen)
+        self._access_code_gen_raw_async: AccessCodeGenAsync = to_async(access_code_gen)
 
         # 存储控制码和资源的关系：control_code -> resource
         self._control_resource_map: Dict[ControlCode, Resource] = {}
@@ -280,6 +269,7 @@ class ResourceManager(Generic[Resource, ControlCode, AccessCode]):
                     return await self._access_code_gen_raw_async(resource)
                 except TypeError:
                     return await self._access_code_gen_raw_async()
+
 
     async def is_control_code_async(self, code: Code) -> bool:
         """
@@ -478,18 +468,18 @@ class ResourceManager(Generic[Resource, ControlCode, AccessCode]):
 
 
     # 异步方法转同步
-    control_code_gen    = async_to_sync(control_code_gen_async)
-    access_code_gen     = async_to_sync(access_code_gen_async)
-    is_control_code     = async_to_sync(is_control_code_async)
-    is_access_code      = async_to_sync(is_access_code_async)
-    create              = async_to_sync(create_async)
-    replace             = async_to_sync(replace_async)
-    delete              = async_to_sync(delete_async)
-    get                 = async_to_sync(get_async)
-    share               = async_to_sync(share_async)
-    revoke              = async_to_sync(revoke_async)
-    get_access_codes    = async_to_sync(get_access_codes_async)
-    transfer            = async_to_sync(transfer_async)
+    control_code_gen    = to_sync(control_code_gen_async)
+    access_code_gen     = to_sync(access_code_gen_async)
+    is_control_code     = to_sync(is_control_code_async)
+    is_access_code      = to_sync(is_access_code_async)
+    create              = to_sync(create_async)
+    replace             = to_sync(replace_async)
+    delete              = to_sync(delete_async)
+    get                 = to_sync(get_async)
+    share               = to_sync(share_async)
+    revoke              = to_sync(revoke_async)
+    get_access_codes    = to_sync(get_access_codes_async)
+    transfer            = to_sync(transfer_async)
 
 
 

@@ -12,7 +12,7 @@ from uuid import uuid4
 import aiofiles
 import aiofiles.os
 
-from .utils import sync_to_async, is_async_func
+from .utils import to_async
 from .resource_manager import (
     ResourceManager,
     ControlCode, AccessCode, Resource,
@@ -37,8 +37,8 @@ FileNameGenAsync = Callable[[Optional[Resource], Optional[ControlCode]], Corouti
 
 
 class FileBackedResourceManager(
-    ResourceManager[FileName, ControlCode, AccessCode],
-    Generic[Resource, ControlCode, AccessCode]
+    Generic[Resource, ControlCode, AccessCode],
+    ResourceManager[FileName, ControlCode, AccessCode]
 ):
     """
     Subclass of ResourceManager.
@@ -80,23 +80,17 @@ class FileBackedResourceManager(
         # 数据转换函数
         if not dumps_function:
             dumps_function = pickle.dumps
-        if not is_async_func(dumps_function):
-            dumps_function = sync_to_async(dumps_function)
 
         if not loads_function:
             loads_function = pickle.loads
-        if not is_async_func(loads_function):
-            loads_function = sync_to_async(loads_function)
 
-        self.dumps_async: DumpsFunctionAsync = dumps_function
-        self.loads_async: LoadsFunctionAsync = loads_function
+        self.dumps_async: DumpsFunctionAsync = to_async(dumps_function)
+        self.loads_async: LoadsFunctionAsync = to_async(loads_function)
 
         # 文件名生成函数
         if not file_name_gen:
             file_name_gen = uuid4_str
-        if not is_async_func(file_name_gen):
-            file_name_gen = sync_to_async(file_name_gen)
-        self._file_name_gen_raw_async: FileNameGenAsync = file_name_gen
+        self._file_name_gen_raw_async: FileNameGenAsync = to_async(file_name_gen)
 
 
     def _get_path(self, file_name: str) -> str:
