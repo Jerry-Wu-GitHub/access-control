@@ -240,6 +240,7 @@ class ResourceManager(Generic[Resource, ControlCode, AccessCode]):
 
     # ==== 子类应该不用重载的方法 ====
 
+    @async_locked
     async def control_code_gen_async(self, resource: Optional[Resource] = None) -> ControlCode:
         """
         包装了生成控制码的函数，使其能够接受接受 resource 参数。
@@ -250,6 +251,7 @@ class ResourceManager(Generic[Resource, ControlCode, AccessCode]):
             return await self._control_code_gen_raw_async()
 
 
+    @async_locked
     async def access_code_gen_async(
         self,
         resource: Optional[Resource] = None,
@@ -271,6 +273,7 @@ class ResourceManager(Generic[Resource, ControlCode, AccessCode]):
                     return await self._access_code_gen_raw_async()
 
 
+    @async_locked
     async def is_control_code_async(self, code: Code) -> bool:
         """
         判断一个 code 是否是控制码。
@@ -278,6 +281,7 @@ class ResourceManager(Generic[Resource, ControlCode, AccessCode]):
         return code in self._control_resource_map
 
 
+    @async_locked
     async def is_access_code_async(self, code: Code) -> bool:
         """
         判断一个 code 是否是访问码。
@@ -285,6 +289,7 @@ class ResourceManager(Generic[Resource, ControlCode, AccessCode]):
         return code in self._access_control_map
 
 
+    @async_locked
     async def create_async(
         self,
         resource: Resource,
@@ -314,6 +319,7 @@ class ResourceManager(Generic[Resource, ControlCode, AccessCode]):
         return control_code
 
 
+    @async_locked
     async def replace_async(self, control_code: ControlCode, new_resource: Resource) -> None:
         """
         替换一项资源。
@@ -327,6 +333,7 @@ class ResourceManager(Generic[Resource, ControlCode, AccessCode]):
         await self._set_resource_async(control_code, new_resource)
 
 
+    @async_locked
     async def delete_async(self, control_code: ControlCode) -> None:
         """
         删除一项资源及其控制码、所有访问码。
@@ -346,6 +353,7 @@ class ResourceManager(Generic[Resource, ControlCode, AccessCode]):
         await self._delete_resource_async(control_code)
 
 
+    @async_locked
     async def get_async(self, code: Code) -> Resource:
         """
         获取一项资源。
@@ -360,6 +368,7 @@ class ResourceManager(Generic[Resource, ControlCode, AccessCode]):
         return await self._get_resource_async(control_code)
 
 
+    @async_locked
     async def share_async(self, parent_code: Code, child_code: Optional[AccessCode] = None) -> AccessCode:
         """
         生成一个新的访问码。
@@ -380,6 +389,7 @@ class ResourceManager(Generic[Resource, ControlCode, AccessCode]):
         )
 
 
+    @async_locked
     async def revoke_async(self, ancestor_code: Code, descendant_code: AccessCode) -> None:
         """
         撤销一个访问码及其所有子访问码，不能撤销自己。
@@ -411,6 +421,7 @@ class ResourceManager(Generic[Resource, ControlCode, AccessCode]):
             self._access_control_map.pop(node.identifier, None)
 
 
+    @async_locked
     async def get_access_codes_async(self, code: Code) -> List[AccessCode]:
         """
         查看 code 的所有后代。
@@ -436,6 +447,7 @@ class ResourceManager(Generic[Resource, ControlCode, AccessCode]):
         ]
 
 
+    @async_locked
     async def transfer_async(
         self,
         old_control_code: ControlCode,

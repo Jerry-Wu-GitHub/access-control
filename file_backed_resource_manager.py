@@ -13,6 +13,7 @@ import aiofiles
 import aiofiles.os
 
 from .utils import to_async
+from .exceptions import PermissionInsufficient
 from .resource_manager import (
     ResourceManager,
     ControlCode, AccessCode, Resource,
@@ -151,9 +152,14 @@ class FileBackedResourceManager(
 
         Args:
             control_code (Code): 控制码。
+
+        Raises:
+            PermissionInsufficient: 如果 file_name_gen 生成了重复的文件名。
         """
         # 生成文件名
         file_name = await self.file_name_gen_async(resource=resource, control_code=control_code)
+        if file_name in self._control_resource_map.values():
+            raise PermissionInsufficient("Duplicate file name")
 
         # 写入文件
         await aiofiles.os.makedirs(self.data_dir_path, exist_ok=True)
