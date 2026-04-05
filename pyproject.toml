@@ -1,4 +1,29 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
 [project]
-name = "access_control"
-version = "0.2.4"
-requires-python = ">=3.10,<3.14"
+name = "access-control-async"    # 你的包名
+version = "0.2.5"                # 当前版本
+description = "A brief description of your access control library"  # 简短描述
+readme = "README.md"             # 自述文件，PyPI 会将其渲染为项目首页
+authors = [{name = "Jerry", email = "wujr24@m.fudan.edu.cn"}]  # 替换为你的信息
+license = {text = "MIT"}         # 指定许可证，与你的 LICENSE 文件一致
+classifiers = [                  # 帮助用户在 PyPI 上找到你的项目
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+requires-python = ">=3.10"
+dependencies = [                 # 项目的运行时依赖，从 requirements.txt 移植
+    "treelib",
+    "aiofiles",
+    "pathvalidate",
+]
+
+[project.urls]                   # 可选，但推荐，指向你的项目主页或仓库
+Homepage = "https://github.com/Jerry-Wu-GitHub/access-control"
+Repository = "https://github.com/Jerry-Wu-GitHub/access-control.git"
+
+[tool.setuptools.packages.find]
+where = ["src"]                         # 在 src 目录下找包

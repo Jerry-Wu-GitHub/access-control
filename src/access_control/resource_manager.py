@@ -5,14 +5,13 @@ class: ResourceManager
 import asyncio
 from collections.abc import Coroutine, Hashable, Callable
 import functools
-from inspect import isawaitable
-from typing import Any, Dict, Generic, List, Optional, TypeVar, Union
+from typing import Dict, Generic, List, Optional, TypeVar, Union
 from uuid import uuid4
 
 from treelib import Tree
 from treelib.exceptions import NodeIDAbsentError
 
-from .utils import to_sync, to_async, AsyncRLock
+from .utils import to_async, AsyncRLock
 from .exceptions import CodeExistError, PermissionInsufficient, ResourceManagerError
 
 
@@ -99,10 +98,17 @@ class ResourceManager(Generic[Resource, ControlCode, AccessCode]):
         self._access_control_map: Dict[AccessCode, ControlCode] = {}
 
         # 存储资源的访问码树：control_code -> code_tree
-        self._control_code_tree_map: Dict[ControlCode, Tree[Code]] = {}
+        self._control_code_tree_map: Dict[ControlCode, Tree] = {}
 
         # 异步锁，用于线程安全
         self._lock_async = AsyncRLock()
+
+
+    def __len__(self) -> int:
+        """
+        返回资源数量。
+        """
+        return len(self._control_resource_map)
 
 
     # ==== 子类可能需要重载的方法 ====
@@ -128,7 +134,7 @@ class ResourceManager(Generic[Resource, ControlCode, AccessCode]):
         raise PermissionInsufficient("Code not found")
 
 
-    async def _get_tree_async(self, code: Code) -> Tree[Code]:
+    async def _get_tree_async(self, code: Code) -> Tree:
         """
         返回 code 的访问控制树。
 
@@ -136,7 +142,7 @@ class ResourceManager(Generic[Resource, ControlCode, AccessCode]):
             code (Code): 控制码或访问码。
 
         Returns:
-            Tree[Code]: code 所在的访问控制树。
+            Tree: code 所在的访问控制树。
 
         Raises:
             PermissionInsufficient: 如果 code 不存在。
@@ -191,7 +197,7 @@ class ResourceManager(Generic[Resource, ControlCode, AccessCode]):
         return access_code
 
 
-    async def _create_tree_async(self, control_code: ControlCode) -> Tree[Code]:
+    async def _create_tree_async(self, control_code: ControlCode) -> Tree:
         """
         创建一棵访问树。
         """
@@ -479,66 +485,56 @@ class ResourceManager(Generic[Resource, ControlCode, AccessCode]):
         await self.delete_async(old_control_code)
 
 
-    # 异步方法转同步
-    control_code_gen    = to_sync(control_code_gen_async)
-    access_code_gen     = to_sync(access_code_gen_async)
-    is_control_code     = to_sync(is_control_code_async)
-    is_access_code      = to_sync(is_access_code_async)
-    create              = to_sync(create_async)
-    replace             = to_sync(replace_async)
-    delete              = to_sync(delete_async)
-    get                 = to_sync(get_async)
-    share               = to_sync(share_async)
-    revoke              = to_sync(revoke_async)
-    get_access_codes    = to_sync(get_access_codes_async)
-    transfer            = to_sync(transfer_async)
+    # ==== 异步方法转同步 ====
 
+    def control_code_gen(self, resource: Optional[Resource] = None) -> ControlCode:
+        """ Synchronous version of `.control_code_gen_async`. """
+        return asyncio.run(self.control_code_gen_async(resource))
 
+    def access_code_gen(
+        self, resource: Optional[Resource] = None,
+        control_code: Optional[ControlCode] = None,
+        parent_access_code: Optional[AccessCode] = None
+    ) -> AccessCode:
+        """ Synchronous version of `.access_code_gen_async`. """
+        return asyncio.run(self.access_code_gen_async(resource, control_code, parent_access_code))
 
-def _test():
-    """
-    测试。
-    """
-    resource = 1
-    manager = ResourceManager()
+    def is_control_code(self, code: Code) -> bool:
+        """ Synchronous version of `.is_control_code_async`. """
+        return asyncio.run(self.is_control_code_async(code))
 
-    control_code = manager.create(resource)
-    print(f"{control_code=}")
+    def is_access_code(self, code: Code) -> bool:
+        """ Synchronous version of `.is_access_code_async`. """
+        return asyncio.run(self.is_access_code_async(code))
 
-    access_code1 = manager.share(control_code)
-    access_code2 = manager.share(control_code)
-    access_code3 = manager.share(access_code1)
-    print(manager.get_access_codes(control_code)) # access_code1, access_code2, access_code3
+    def create(self, resource: Resource, control_code: Optional[ControlCode] = None) -> ControlCode:
+        """ Synchronous version of `.create_async`. """
+        return asyncio.run(self.create_async(resource, control_code))
 
-    manager.revoke(control_code, access_code1)
-    print(manager.get_access_codes(control_code)) # access_code2
+    def replace(self, control_code: ControlCode, new_resource: Resource) -> None:
+        """ Synchronous version of `.replace_async`. """
+        return asyncio.run(self.replace_async(control_code, new_resource))
 
-    import pickle
-    print(pickle.dumps(manager))
+    def delete(self, control_code: ControlCode) -> None:
+        """ Synchronous version of `.delete_async`. """
+        return asyncio.run(self.delete_async(control_code))
 
+    def get(self, code: Code) -> Resource:
+        """ Synchronous version of `.get_async`. """
+        return asyncio.run(self.get_async(code))
 
-async def _test_async():
-    """
-    异步测试。
-    """
-    resource = 1
-    manager = ResourceManager()
+    def share(self, parent_code: Code, child_code: Optional[AccessCode] = None) -> AccessCode:
+        """ Synchronous version of `.share_async`. """
+        return asyncio.run(self.share_async(parent_code, child_code))
 
-    control_code = await manager.create_async(resource)
-    print(f"{control_code=}")
+    def revoke(self, ancestor_code: Code, descendant_code: AccessCode) -> None:
+        """ Synchronous version of `.revoke_async`. """
+        return asyncio.run(self.revoke_async(ancestor_code, descendant_code))
 
-    access_code1 = await manager.share_async(control_code)
-    access_code2 = await manager.share_async(control_code)
-    access_code3 = await manager.share_async(access_code1)
-    print(await manager.get_access_codes_async(control_code)) # access_code1, access_code2, access_code3
+    def get_access_codes(self, code: Code) -> List[AccessCode]:
+        """ Synchronous version of `.get_access_codes_async`. """
+        return asyncio.run(self.get_access_codes_async(code))
 
-    await manager.revoke_async(control_code, access_code1)
-    print(await manager.get_access_codes_async(control_code)) # access_code2
-
-    import pickle
-    print(pickle.dumps(manager))
-
-
-if __name__ == '__main__':
-    _test()
-    asyncio.run(_test_async())
+    def transfer(self, old_control_code: ControlCode, new_control_code: ControlCode) -> None:
+        """ Synchronous version of `.transfer_async`. """
+        return asyncio.run(self.transfer_async(old_control_code, new_control_code))

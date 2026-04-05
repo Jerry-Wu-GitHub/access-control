@@ -11,6 +11,7 @@ from uuid import uuid4
 
 import aiofiles
 import aiofiles.os
+from pathvalidate import ValidationError, is_valid_filename
 
 from .utils import to_async
 from .exceptions import PermissionInsufficient
@@ -155,9 +156,12 @@ class FileBackedResourceManager(
 
         Raises:
             PermissionInsufficient: 如果 file_name_gen 生成了重复的文件名。
+            ValidationError: 如果 file_name_gen 生成了非法的文件名。
         """
         # 生成文件名
         file_name = await self.file_name_gen_async(resource=resource, control_code=control_code)
+        if not is_valid_filename(file_name):
+            raise ValidationError(f"Invalid file name: {file_name}")
         if file_name in self._control_resource_map.values():
             raise PermissionInsufficient("Duplicate file name")
 
@@ -189,58 +193,3 @@ class FileBackedResourceManager(
         file_path = self._get_path(file_name)
         if await aiofiles.os.path.isfile(file_path):
             await aiofiles.os.remove(file_path)
-
-
-def _test():
-    """
-    测试。
-    """
-    resource = {"data": "this is resource in _test"}
-    manager = FileBackedResourceManager("data")
-
-    control_code = manager.create(resource)
-    print(f"{control_code=}")
-
-    access_code1 = manager.share(control_code)
-    access_code2 = manager.share(control_code)
-    access_code3 = manager.share(access_code1)
-    print(manager.get_access_codes(control_code)) # access_code1, access_code2, access_code3
-
-    manager.revoke(control_code, access_code1)
-    print(manager.get_access_codes(control_code)) # access_code2
-
-    print(manager.get(access_code2))
-
-    print(pickle.dumps(manager))
-
-    manager.delete(control_code)
-
-
-async def _test_async():
-    """
-    异步测试。
-    """
-    resource = {"data": "this is resource in _test_async"}
-    manager = FileBackedResourceManager("data")
-
-    control_code = await manager.create_async(resource)
-    print(f"{control_code=}")
-
-    access_code1 = await manager.share_async(control_code)
-    access_code2 = await manager.share_async(control_code)
-    access_code3 = await manager.share_async(access_code1)
-    print(await manager.get_access_codes_async(control_code)) # access_code1, access_code2, access_code3
-
-    await manager.revoke_async(control_code, access_code1)
-    print(await manager.get_access_codes_async(control_code)) # access_code2
-
-    print(await manager.get_async(access_code2))
-
-    print(pickle.dumps(manager))
-
-    await manager.delete_async(control_code)
-
-
-if __name__ == '__main__':
-    _test()
-    asyncio.run(_test_async())
