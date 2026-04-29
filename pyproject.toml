@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "access-control-async"    # 你的包名
-version = "0.2.5"                # 当前版本
+version = "0.2.6"                # 当前版本
 description = "A brief description of your access control library"  # 简短描述
 readme = "README.md"             # 自述文件，PyPI 会将其渲染为项目首页
 authors = [{name = "Jerry", email = "wujr24@m.fudan.edu.cn"}]  # 替换为你的信息

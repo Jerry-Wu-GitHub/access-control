@@ -333,6 +333,9 @@ class ResourceManager(Generic[Resource, ControlCode, AccessCode]):
         Args:
             control_code (ControlCode): 被操作的控制码。
             new_resource (Resource): 新的资源。
+
+        Raises:
+            PermissionInsufficient: 如果控制码不存在。
         """
         if not await self.is_control_code_async(control_code):
             raise PermissionInsufficient("Control code not found")
@@ -343,6 +346,9 @@ class ResourceManager(Generic[Resource, ControlCode, AccessCode]):
     async def delete_async(self, control_code: ControlCode) -> None:
         """
         删除一项资源及其控制码、所有访问码。
+
+        Raises:
+            PermissionInsufficient: 如果控制码不存在。
         """
         if not await self.is_control_code_async(control_code):
             raise PermissionInsufficient("Control code not found")
@@ -467,6 +473,9 @@ class ResourceManager(Generic[Resource, ControlCode, AccessCode]):
         Args:
             old_control_code (ControlCode): 原控制码。
             new_control_code (ControlCode): 新控制码。
+
+        Raises:
+            PermissionInsufficient: 如果 old_control_code 和 new_control_code 中有一者无效。
         """
         if not await self.is_control_code_async(old_control_code):
             raise PermissionInsufficient("Old control code not found")
